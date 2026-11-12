@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { reactive, ref } from "vue";
+import { computed, reactive, ref } from "vue";
 import type { SalaryMode, Settings } from "../types";
 import { useSettingsStore } from "../stores/settings";
-import { paidHoursPerDay } from "../utils/salary";
+import { dailyPay, paidHoursPerDay } from "../utils/salary";
 import { THEMES, THEME_NAMES, THEME_SWATCH, getThemeIdx, setTheme, broadcastSettingsChanged } from "../theme";
 
 const emit = defineEmits<{ close: [] }>();
@@ -42,6 +42,9 @@ function sanitize(s: Settings): Settings {
     annualSalary: nonNeg(s.annualSalary),
     hourSalary: nonNeg(s.hourSalary),
     payday: Math.min(31, Math.max(1, Math.round(s.payday) || 1)),
+    overtimeMultiplier: Number.isFinite(s.overtimeMultiplier)
+      ? Math.min(10, Math.max(0.5, s.overtimeMultiplier))
+      : 1.5,
     workStart: hm(s.workStart, "09:00"),
     workEnd: hm(s.workEnd, "18:00"),
     lunchStart: hm(s.lunchStart, "12:00"),
@@ -78,6 +81,13 @@ const patterns = [
   { value: "single", label: "单休" },
   { value: "alternate", label: "大小周" },
 ] as const;
+
+/** 加班时薪预览（常规时薪 × 倍率） */
+const overtimeRatePreview = computed(() => {
+  const hours = paidHoursPerDay(draft);
+  if (hours <= 0) return "0.00";
+  return ((dailyPay(new Date(), draft) / hours) * draft.overtimeMultiplier).toFixed(2);
+});
 </script>
 
 <template>
@@ -139,6 +149,25 @@ const patterns = [
           </button>
         </div>
       </div>
+
+      <div class="time-pair">
+        <div class="form-item">
+          <label>加班工资倍率（×）</label>
+          <input
+            v-model.number="draft.overtimeMultiplier"
+            type="number"
+            min="0.5"
+            max="10"
+            step="0.5"
+            placeholder="1.5"
+          />
+        </div>
+        <div class="form-item">
+          <label>加班时薪预览</label>
+          <input :value="'¥' + overtimeRatePreview + ' / 小时'" disabled />
+        </div>
+      </div>
+      <div class="form-hint">加班时长按「1.5 倍工资」等倍率折算，作用于加班开关与补录的全部记录</div>
 
       <div class="time-pair">
         <div class="form-item">

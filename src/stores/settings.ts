@@ -17,6 +17,7 @@ const DEFAULT_SETTINGS: Settings = {
   lunchEnd: "13:00",
   lunchPaid: false,
   payday: 10,
+  overtimeMultiplier: 1.5,
 };
 
 function load(): Settings {

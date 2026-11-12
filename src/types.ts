@@ -26,6 +26,23 @@ export interface Settings {
   lunchPaid: boolean;
   /** 发薪日（每月几号，1-31） */
   payday: number;
+  /** 加班工资倍率（如 1.5 表示 1.5 倍时薪） */
+  overtimeMultiplier: number;
+}
+
+/** 一条加班记录（持久化） */
+export interface OvertimeSession {
+  id: string;
+  /** 加班归属日期 "YYYY-MM-DD"（开始加班那天） */
+  date: string;
+  /** 开始时刻（毫秒时间戳） */
+  startAt: number;
+  /** 结束时刻（毫秒时间戳）；null 表示正在进行中 */
+  endAt: number | null;
+  /** live = 加班按钮实时计时；manual = 事后补录 */
+  source: "live" | "manual";
+  /** 备注（补录时可填） */
+  note?: string;
 }
 
 /** 一天中的实时状态 */
@@ -35,8 +52,12 @@ export interface DayState {
   isWorkday: boolean;
   /** 当前班次归属日期（跨午夜夜班可能是昨天） */
   shiftDate: Date;
-  /** 今日已赚（元） */
+  /** 今日已赚（元，含加班费） */
   todayEarned: number;
+  /** 今日基本工资已赚（元，不含加班） */
+  baseEarned: number;
+  /** 今日加班费已赚（元） */
+  overtimeEarned: number;
   /** 今日应赚满额（元） */
   todayFull: number;
   /** 今日进度 0-1 */

@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "窗口能力：拖动、关闭、最小化、创建设置窗口、聚焦",
-  "windows": ["main", "settings"],
+  "description": "窗口能力：拖动、关闭、最小化、创建设置/日历窗口、聚焦",
+  "windows": ["main", "settings", "calendar"],
   "permissions": [
     "core:default",
     "core:window:allow-close",

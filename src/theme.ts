@@ -35,9 +35,9 @@ export function setTheme(idx: number) {
   broadcast({ type: "theme", idx });
 }
 
-/** 跨窗口消息通道（主题 / 设置变更） */
+/** 跨窗口消息通道（主题 / 设置 / 加班记录变更） */
 export interface SyncMessage {
-  type: "theme" | "settings";
+  type: "theme" | "settings" | "overtime";
   idx?: number;
 }
 
@@ -52,6 +52,11 @@ export function broadcast(msg: SyncMessage) {
 /** 设置保存后广播，让其他窗口热重载配置 */
 export function broadcastSettingsChanged() {
   broadcast({ type: "settings" });
+}
+
+/** 加班记录变更后广播，让主窗口 / 日历窗口实时同步 */
+export function broadcastOvertimeChanged() {
+  broadcast({ type: "overtime" });
 }
 
 /** 监听其他窗口的消息 */

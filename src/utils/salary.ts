@@ -1,5 +1,6 @@
-import type { DayKind, DayState, Settings } from "../types";
+import type { DayKind, DayState, OvertimeSession, Settings } from "../types";
 import { lookupHoliday } from "./holidays";
+import { dateKeyOf, parseDateKey, sessionSeconds, sessionsOn } from "./overtime";
 
 /* ---------------- 基础时间工具 ---------------- */
 
@@ -145,6 +146,40 @@ export function dailyPay(
   return effectiveMonthly(settings) / workdays;
 }
 
+/* ---------------- 加班薪资 ---------------- */
+
+/** 常规时薪基准（不含加班倍率） */
+export function baseHourlyRate(date: Date, settings: Settings): number {
+  const hours = paidHoursPerDay(settings);
+  if (hours <= 0) return 0;
+  return dailyPay(date, settings) / hours;
+}
+
+/** 加班时薪（常规时薪 × 加班倍率） */
+export function overtimeHourlyRate(date: Date, settings: Settings): number {
+  return baseHourlyRate(date, settings) * settings.overtimeMultiplier;
+}
+
+/** 一条加班记录的加班费（元）；进行中的以 now 为截止实时累计 */
+export function sessionPay(
+  session: OvertimeSession,
+  settings: Settings,
+  now: Date = new Date(),
+): number {
+  const rate = overtimeHourlyRate(parseDateKey(session.date), settings);
+  return (sessionSeconds(session, now) / 3600) * rate;
+}
+
+/** 某天的加班费合计（元） */
+export function overtimePayOn(
+  key: string,
+  sessions: OvertimeSession[],
+  settings: Settings,
+  now: Date = new Date(),
+): number {
+  return sessionsOn(key, sessions).reduce((sum, s) => sum + sessionPay(s, settings, now), 0);
+}
+
 /* ---------------- 实时状态 ---------------- */
 
 /**
@@ -154,7 +189,11 @@ export function dailyPay(
  * 因此 0 点之后要先看"昨天开始的班次是否仍在进行中"，而不是直接按今天的日期建班次，
  * 否则夜班会在午夜瞬间变成"还没开工/休息中"。
  */
-export function computeDayState(now: Date, settings: Settings): DayState {
+export function computeDayState(
+  now: Date,
+  settings: Settings,
+  sessions: OvertimeSession[] = [],
+): DayState {
   const todayShift = buildShift(now, settings);
   const yday = startOfDay(now);
   yday.setDate(yday.getDate() - 1);
@@ -178,20 +217,27 @@ export function computeDayState(now: Date, settings: Settings): DayState {
     perHour,
   } as const;
 
+  /** 某天的加班费（进行中的实时累计） */
+  const otPayOf = (d: Date) => overtimePayOn(dateKeyOf(d), sessions, settings, now);
+
   // 上班中 / 午休中（夜班跨午夜同样适用）
   if (active && dayKind(active.date, settings).workday) {
     const todayFull = pay;
+    const overtimeEarned = otPayOf(active.date);
     const progressOf = (elapsed: number) =>
       active.paidSeconds > 0 ? Math.min(1, elapsed / active.paidSeconds) : 0;
 
     if (!settings.lunchPaid && active.lunch && now >= active.lunch.start && now < active.lunch.end) {
       const worked = paidElapsedSeconds(active, active.lunch.start, settings);
+      const baseEarned = (perHour / 3600) * worked;
       return {
         ...base,
         isWorkday: true,
         status: "lunch",
         shiftDate: active.date,
-        todayEarned: (perHour / 3600) * worked,
+        todayEarned: baseEarned + overtimeEarned,
+        baseEarned,
+        overtimeEarned,
         todayFull,
         progress: progressOf(worked),
         countdownSeconds: Math.ceil((active.lunch.end.getTime() - now.getTime()) / 1000),
@@ -200,12 +246,15 @@ export function computeDayState(now: Date, settings: Settings): DayState {
     }
 
     const elapsed = paidElapsedSeconds(active, now, settings);
+    const baseEarned = (perHour / 3600) * elapsed;
     return {
       ...base,
       isWorkday: true,
       status: "working",
       shiftDate: active.date,
-      todayEarned: (perHour / 3600) * elapsed,
+      todayEarned: baseEarned + overtimeEarned,
+      baseEarned,
+      overtimeEarned,
       todayFull,
       progress: progressOf(elapsed),
       countdownSeconds: Math.ceil((active.end.getTime() - now.getTime()) / 1000),
@@ -216,12 +265,15 @@ export function computeDayState(now: Date, settings: Settings): DayState {
   const kind = dayKind(now, settings);
 
   if (!kind.workday) {
+    const overtimeEarned = otPayOf(now);
     return {
       ...base,
       isWorkday: false,
       status: "restDay",
       shiftDate: now,
-      todayEarned: 0,
+      todayEarned: overtimeEarned,
+      baseEarned: 0,
+      overtimeEarned,
       todayFull: 0,
       progress: 0,
       countdownSeconds: null,
@@ -230,12 +282,15 @@ export function computeDayState(now: Date, settings: Settings): DayState {
   }
 
   if (now < todayShift.start) {
+    const overtimeEarned = otPayOf(now);
     return {
       ...base,
       isWorkday: true,
       status: "beforeWork",
       shiftDate: now,
-      todayEarned: 0,
+      todayEarned: overtimeEarned,
+      baseEarned: 0,
+      overtimeEarned,
       todayFull: pay,
       progress: 0,
       countdownSeconds: Math.ceil((todayShift.start.getTime() - now.getTime()) / 1000),
@@ -243,12 +298,15 @@ export function computeDayState(now: Date, settings: Settings): DayState {
     };
   }
 
+  const overtimeEarned = otPayOf(now);
   return {
     ...base,
     isWorkday: true,
     status: "afterWork",
     shiftDate: now,
-    todayEarned: pay,
+    todayEarned: pay + overtimeEarned,
+    baseEarned: pay,
+    overtimeEarned,
     todayFull: pay,
     progress: 1,
     countdownSeconds: null,
@@ -262,12 +320,16 @@ export function computeDayState(now: Date, settings: Settings): DayState {
  * 本月已赚 = 本月已完成班次满额 + 进行中班次的实时已赚。
  * 班次按"归属日期"（上班那天）计入，跨午夜夜班不会重复计也不会漏计。
  */
-export function monthEarnedToDate(now: Date, settings: Settings): number {
+export function monthEarnedToDate(
+  now: Date,
+  settings: Settings,
+  sessions: OvertimeSession[] = [],
+): number {
   const y = now.getFullYear();
   const m = now.getMonth();
   const days = new Date(y, m + 1, 0).getDate();
   const mw = monthWorkdays(y, m, settings);
-  const st = computeDayState(now, settings);
+  const st = computeDayState(now, settings, sessions);
 
   const sDate = st.shiftDate;
   const sInMonth = sDate.getFullYear() === y && sDate.getMonth() === m;
@@ -279,9 +341,19 @@ export function monthEarnedToDate(now: Date, settings: Settings): number {
     if (!dayKind(date, settings).workday) continue;
     if (!sInMonth) continue; // 班次归属上月（跨年夜班进行中）：本月暂无收益
     if (d < sDay) sum += dailyPay(date, settings, mw);
-    else if (d === sDay) sum += st.todayEarned; // 归属日当天：按实时已赚，避免重复计满额
+    else if (d === sDay) sum += st.baseEarned; // 归属日当天：按实时已赚，避免重复计满额
     // d > sDay：该班次尚未开始
   }
+
+  // 加班费：本月截至今天（进行中的实时累计）
+  const todayKey = dateKeyOf(now);
+  const monthPrefix = `${y}-${String(m + 1).padStart(2, "0")}-`;
+  for (const s of sessions) {
+    if (s.date > todayKey) continue;
+    if (!s.date.startsWith(monthPrefix)) continue;
+    sum += sessionPay(s, settings, now);
+  }
+
   return sum;
 }
 
